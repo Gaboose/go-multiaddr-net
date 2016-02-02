@@ -12,11 +12,13 @@ import (
 	ma "github.com/jbenet/go-multiaddr"
 )
 
-var wsnilconf, _ = websocket.NewConfig("/", "/")
+func init() {
+	ma.AddProtocol(ma.Protocol{481, -1, "ws", ma.CodeToVarint(481)})
+}
 
 type WS struct{}
 
-func (p WS) Match(m ma.Multiaddr, side int) (int, bool) {
+func (w WS) Match(m ma.Multiaddr, side int) (int, bool) {
 	ps := m.Protocols()
 
 	if len(ps) >= 1 && ps[0].Name == "ws" {
@@ -33,37 +35,66 @@ func (p WS) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (p WS) Materialize(m ma.Multiaddr, side int) ContextMutator {
+func (w WS) Apply(m ma.Multiaddr, side int, ctx Context) error {
+	var path string
+	// ws client matches /http/ws too, so /ws might not be the first protocol
+	for _, p := range m.Protocols() {
+		if p.Name == "ws" {
+			pth, err := m.ValueForProtocol(p.Code)
+			if err != nil {
+				return err
+			}
+			path = pth
+			break
+		}
+	}
+	sctx := ctx.Special()
+	mctx := ctx.Misc()
+
 	switch side {
 
 	case S_Client:
+		// resolve url
+		var url string
+		switch t := sctx.NetConn.(type) {
+		case *net.TCPConn:
+			url = fmt.Sprintf("ws://%s/%s", t.RemoteAddr().String(), path)
+		default:
+			url = fmt.Sprintf("ws://foo.bar/%s", path)
+		}
 
-		return func(ctx Context) error {
-			sctx := ctx.Special()
-			wcon, err := p.Select(sctx.NetConn)
-			if wcon != nil {
-				sctx.NetConn = wcon
-			}
+		wcon, err := w.Select(sctx.NetConn, url)
+		if err != nil {
 			return err
 		}
+		sctx.NetConn = wcon
+		return nil
 
 	case S_Server:
-
-		return func(ctx Context) error {
-			sctx := ctx.Special()
-			mctx := ctx.Misc()
-			ln := p.Handle(mctx.HTTPMux, "/")
-			sctx.NetListener = ln
-			return nil
+		if mctx.HTTPMux == nil {
+			// help the user out if /http is missing before /ws
+			HTTP{}.Apply(m, S_Server, ctx)
 		}
+		ln, err := w.Handle(mctx.HTTPMux, "/"+path)
+		if err != nil {
+			return err
+		}
+		sctx.NetListener = ln
+		sctx.CloseFn = ConcatClose(ln.Close, sctx.CloseFn)
+		return nil
 
 	}
 
-	return nil
+	return fmt.Errorf("incorrect side constant")
 }
 
-func (p WS) Select(netcon net.Conn) (*websocket.Conn, error) {
-	wcon, err := websocket.NewClient(wsnilconf, netcon)
+func (w WS) Select(netcon net.Conn, url string) (*websocket.Conn, error) {
+	conf, err := websocket.NewConfig(url, url)
+	if err != nil {
+		return nil, err
+	}
+
+	wcon, err := websocket.NewClient(conf, netcon)
 	if err != nil {
 		return nil, err
 	}
@@ -71,15 +102,29 @@ func (p WS) Select(netcon net.Conn) (*websocket.Conn, error) {
 	return wcon, nil
 }
 
-func (p WS) Handle(mux *http.ServeMux, pattern string) net.Listener {
+func (w WS) Handle(mux *ServeMux, pattern string) (net.Listener, error) {
+
+	closeCh := make(chan struct{})
 	ln := &wslistener{
 		make(chan net.Conn),
-		make(chan struct{}),
+		closeCh,
 	}
 
-	mux.Handle(pattern, ln)
+	var err error
+	func() {
+		defer recoverToError(&err, nil)
+		mux.Handle(pattern, ln)
+	}()
+	if err != nil {
+		return nil, err
+	}
 
-	return ln
+	go func() {
+		<-closeCh
+		mux.DeHandle(pattern)
+	}()
+
+	return ln, nil
 }
 
 type wslistener struct {
@@ -89,9 +134,11 @@ type wslistener struct {
 
 func (ln wslistener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	websocket.Handler(func(wcon *websocket.Conn) {
+
 		// It appears we mustn't pass wcon to external users as is.
 		// We'll pass a pipe instead, because the only way to know if a wcon
 		// was closed remotely is to read from it until EOF.
+
 		ch := make(chan struct{})
 		p1, p2 := net.Pipe()
 

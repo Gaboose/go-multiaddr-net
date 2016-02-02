@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 
 	ma "github.com/jbenet/go-multiaddr"
 )
@@ -25,38 +24,36 @@ func (t TCP) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (t TCP) Materialize(m ma.Multiaddr, side int) ContextMutator {
+func (t TCP) Apply(m ma.Multiaddr, side int, ctx Context) error {
 	p := m.Protocols()[0]
 	port, _ := m.ValueForProtocol(p.Code)
+
+	mctx := ctx.Misc()
+	sctx := ctx.Special()
 
 	switch side {
 
 	case S_Client:
-
-		return func(ctx Context) error {
-			mctx := ctx.Misc()
-			sctx := ctx.Special()
-			netcon, err := t.Dial(mctx.IP, port)
-			if netcon != nil {
-				sctx.NetConn = netcon
-			}
+		netcon, err := t.Dial(mctx.IP, port)
+		if err != nil {
 			return err
 		}
+		sctx.NetConn = netcon
+		sctx.CloseFn = netcon.Close
+		return nil
 
 	case S_Server:
-
-		return func(ctx Context) error {
-			mctx := ctx.Misc()
-			sctx := ctx.Special()
-			netln, err := t.Listen(mctx.IP, port)
-			if netln != nil {
-				sctx.NetListener = netln
-			}
+		netln, err := t.Listen(mctx.IP, port)
+		if err != nil {
 			return err
 		}
+		sctx.NetListener = netln
+		sctx.CloseFn = netln.Close
+		return nil
 
 	}
-	return nil
+
+	return fmt.Errorf("incorrect side constant")
 }
 
 func (t TCP) Dial(ip net.IP, portstr string) (*net.TCPConn, error) {
@@ -89,28 +86,6 @@ func (t TCP) Listen(ip net.IP, portstr string) (*net.TCPListener, error) {
 	}
 
 	return ln, nil
-}
-
-func ResolveTCPAddr(m ma.Multiaddr) (*net.TCPAddr, error) {
-	nnet, naddr, err := DialArgs(m)
-	if err != nil {
-		return nil, err
-	}
-
-	return net.ResolveTCPAddr(nnet, naddr)
-}
-
-func DialArgs(m ma.Multiaddr) (string, string, error) {
-	parts := strings.Split(m.String(), "/")[1:]
-
-	switch parts[0] {
-	case "ip4":
-		return "tcp4", fmt.Sprintf("%s:%s", parts[1], parts[3]), nil
-	case "ip6":
-		return "tcp6", fmt.Sprintf("[%s]:%s", parts[1], parts[3]), nil
-	default:
-		return "", "", fmt.Errorf("unsupported protocol %s under tcp", parts[0])
-	}
 }
 
 // FromTCPAddr converts a *net.TCPAddr type to a Multiaddr.

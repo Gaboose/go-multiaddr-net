@@ -23,32 +23,30 @@ func (_ IP) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (_ IP) Materialize(m ma.Multiaddr, side int) ContextMutator {
+func (_ IP) Apply(m ma.Multiaddr, side int, ctx Context) error {
 	p := m.Protocols()[0]
 	name := p.Name
 	s, _ := m.ValueForProtocol(p.Code)
 
-	return func(ctx Context) error {
-		mctx := ctx.Misc()
-		ip := net.ParseIP(s)
-		if ip == nil {
-			return fmt.Errorf("incorrect ip %s", m)
-		}
-
-		switch name {
-		case "ip4":
-			if ip = ip.To4(); ip == nil {
-				return fmt.Errorf("incorrect ip4 %s", m)
-			}
-		case "ip6":
-			if ip = ip.To16(); ip == nil {
-				return fmt.Errorf("incorrent ip6 %s", m)
-			}
-		}
-
-		mctx.IP = ip
-		return nil
+	mctx := ctx.Misc()
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return fmt.Errorf("incorrect ip %s", m)
 	}
+
+	switch name {
+	case "ip4":
+		if ip = ip.To4(); ip == nil {
+			return fmt.Errorf("incorrect ip4 %s", m)
+		}
+	case "ip6":
+		if ip = ip.To16(); ip == nil {
+			return fmt.Errorf("incorrent ip6 %s", m)
+		}
+	}
+
+	mctx.IP = ip
+	return nil
 }
 
 // FromIP converts a net.IP type to a Multiaddr.

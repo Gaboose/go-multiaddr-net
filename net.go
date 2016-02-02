@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	ma "github.com/jbenet/go-multiaddr"
 )
@@ -46,7 +47,10 @@ type Listener interface {
 // Dial connects to a remote address
 func Dial(remote ma.Multiaddr) (Conn, error) {
 
-	chain, _, err := buildChain(remote, S_Client)
+	matchers.Lock()
+	defer matchers.Unlock()
+
+	chain, split, err := matchers.buildChain(remote, S_Client)
 	if err != nil {
 		return nil, err
 	}
@@ -55,83 +59,111 @@ func Dial(remote ma.Multiaddr) (Conn, error) {
 	sctx := ctx.Special()
 
 	// apply context mutators
-	for _, cm := range chain {
-		err := cm(ctx)
+	for i, mch := range chain {
+
+		err := mch.Apply(split[i], S_Client, ctx)
 		if err != nil {
-			if con := ctx.Special().NetConn; con != nil {
-				con.Close()
+			if sctx.CloseFn != nil {
+				sctx.CloseFn()
 			}
 			return nil, err
 		}
+
+		if sctx.PreAddr == nil {
+			sctx.PreAddr = split[i]
+		} else {
+			sctx.PreAddr = sctx.PreAddr.Encapsulate(split[i])
+		}
+
+	}
+
+	if sctx.NetConn == nil {
+		if sctx.CloseFn != nil {
+			sctx.CloseFn()
+		}
+		return nil, fmt.Errorf("insufficient address for a connection: %s", remote)
 	}
 
 	return &conn{
-		Conn:  sctx.NetConn,
-		raddr: remote,
+		Conn:    sctx.NetConn,
+		raddr:   remote,
+		closeFn: sctx.CloseFn,
 	}, nil
 }
 
-// relisten holds contexts of reusable listeners
-var relisten = map[ma.Multiaddr]Context{}
+// matchreg is a Matcher registry used by Dial and Listen functions
+type matchreg struct {
+	sync.Mutex
+
+	// standard Matchers for both dialing and listening
+	protocols []MatchApplier
+
+	// running listeners available for reuse (e.g. with a ServeMux)
+	reusable []MatchApplier
+}
+
+var matchers = &matchreg{
+	protocols: []MatchApplier{
+		IP{},
+		TCP{},
+		HTTP{},
+		WS{},
+	},
+}
 
 // Listen announces on the local network address local.
 func Listen(local ma.Multiaddr) (Listener, error) {
+	matchers.Lock()
+	defer matchers.Unlock()
 
-	var chain []ContextMutator
-	var split []ma.Multiaddr
-	var ctx Context
-	var err error
-
-	// see if we can reuse a listener,
-	// e.g. an http server for another websocket
-	for m, c := range relisten {
-
-		if tail, ok := trimPrefix(local, m); ok {
-			// got lucky, build only the differing part, reuse context
-			chain, split, err = buildChain(tail, S_Client)
-			if err != nil {
-				return nil, err
-			}
-			ctx = c
-			break
-		}
+	// resolve a chain of applicable MatchAppliers
+	chain, split, err := matchers.buildChain(local, S_Server)
+	if err != nil {
+		return nil, err
 	}
 
-	// nothing to reuse, build the whole chain, create new context
-	if chain == nil {
-		chain, split, err = buildChain(local, S_Client)
-		if err != nil {
-			if ln := ctx.Special().NetListener; ln != nil {
-				ln.Close()
-			}
-			return nil, err
-		}
-		ctx = Context{}
-	}
-
+	ctx := Context{}
 	sctx := ctx.Special()
 
-	// apply context mutators
-	for i, cm := range chain {
-		err := cm(ctx)
+	// apply chain to empty context
+	for i, mch := range chain {
+
+		err := mch.Apply(split[i], S_Server, ctx)
+
 		if err != nil {
-			if ln := ctx.Special().NetListener; ln != nil {
-				ln.Close()
+			// we reset sctx to ctx.Special() again, since it may have been overriden
+			// by the reusableContext using the ctx1.CopyTo(ctx2) method
+			sctx := ctx.Special()
+
+			if sctx.CloseFn != nil {
+				go sctx.CloseFn()
 			}
 			return nil, err
 		}
 
-		// a mutator can offer the context up to itself
-		// to be reused by another listener later
-		if sctx.Reuse {
-			relisten[ma.Join(split[:i+1]...)] = ctx
-			sctx.Reuse = false
+		if sctx.PreAddr == nil {
+			sctx.PreAddr = split[i]
+		} else {
+			sctx.PreAddr = sctx.PreAddr.Encapsulate(split[i])
 		}
+
+	}
+
+	// we reset sctx to ctx.Special() again, since it may have been overriden
+	// by the reusableContext using the ctx1.CopyTo(ctx2) method
+	sctx = ctx.Special()
+
+	if sctx.NetListener == nil {
+		if sctx.CloseFn != nil {
+			go sctx.CloseFn()
+		}
+		return nil, fmt.Errorf("insufficient address for a listener: %s", local)
 	}
 
 	ln := &listener{
 		Listener: sctx.NetListener,
 		maddr:    local,
+		closeFn:  sctx.CloseFn,
 	}
 
 	return ln, nil
@@ -139,7 +171,8 @@ func Listen(local ma.Multiaddr) (Listener, error) {
 
 type listener struct {
 	net.Listener
-	maddr ma.Multiaddr
+	maddr   ma.Multiaddr
+	closeFn func() error
 }
 
 func (l listener) Accept() (Conn, error) {
@@ -149,17 +182,27 @@ func (l listener) Accept() (Conn, error) {
 	}
 
 	return &conn{
-		Conn:  netcon,
-		laddr: l.maddr,
+		Conn:    netcon,
+		laddr:   l.maddr,
+		closeFn: netcon.Close,
 	}, nil
+}
+
+func (l listener) Close() error {
+	return l.closeFn()
 }
 
 func (l listener) Multiaddr() ma.Multiaddr { return l.maddr }
 
 type conn struct {
 	net.Conn
-	laddr ma.Multiaddr
-	raddr ma.Multiaddr
+	laddr   ma.Multiaddr
+	raddr   ma.Multiaddr
+	closeFn func() error
+}
+
+func (c conn) Close() error {
+	return c.closeFn()
 }
 
 func (c conn) LocalMultiaddr() ma.Multiaddr {
@@ -200,7 +243,11 @@ func FromNetAddr(naddr net.Addr) (ma.Multiaddr, error) {
 }
 
 func recoverToError(maybeErr *error, err error) {
-	if recover() != nil {
-		*maybeErr = err
+	if r := recover(); r != nil {
+		if err != nil {
+			*maybeErr = err
+		} else {
+			*maybeErr = fmt.Errorf("%s", r)
+		}
 	}
 }
