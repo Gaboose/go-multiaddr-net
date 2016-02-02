@@ -45,7 +45,7 @@ func (_ IP) Apply(m ma.Multiaddr, side int, ctx Context) error {
 		}
 	}
 
-	mctx.IP = ip
+	mctx.IPs = append(mctx.IPs, ip)
 	return nil
 }
 

@@ -100,7 +100,8 @@ func (ctx Context) CopyTo(target Context) {
 
 // MiscContext holds things produced by some MatchAppliers and required by others
 type MiscContext struct {
-	IP      net.IP
+	IPs     []net.IP
+	Host    string
 	HTTPMux *ServeMux
 }
 

@@ -20,7 +20,9 @@ const toSleep = time.Millisecond
 func TestDial(t *testing.T) {
 	ms := []ma.Multiaddr{
 		newMultiaddr(t, "/ip4/127.0.0.1/tcp/4324"),
+		newMultiaddr(t, "/dns/localhost/tcp/4324"),
 		newMultiaddr(t, "/ip6/::1/tcp/4325"),
+		newMultiaddr(t, "/dns/localhost/tcp/4325"),
 		newMultiaddr(t, "/ip4/127.0.0.1/tcp/4326/ws/foo"),
 		newMultiaddr(t, "/ip4/127.0.0.1/tcp/4326/http/ws/bar"),
 	}
@@ -46,7 +48,7 @@ func TestDial(t *testing.T) {
 	for _, m := range ms {
 		c, err := Dial(m)
 		if err != nil {
-			t.Errorf("Dial(%s) returned err: %s", m.String(), err)
+			t.Errorf("Dial(%s) err: %s", m.String(), err)
 			continue
 		}
 		assertEcho(t, c, m)
@@ -62,6 +64,7 @@ func TestListen(t *testing.T) {
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4326/http/ws/foo"),
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4326/http/ws/bar"), //reusing http server on the same port
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4326/ws/qux"),      //http part is optional
+		newMultiaddr(t, "/dns/localhost/tcp/4327"),
 	}
 
 	dms := []ma.Multiaddr{
@@ -70,6 +73,7 @@ func TestListen(t *testing.T) {
 		newMultiaddr(t, "/ip4/127.0.0.1/tcp/4326/ws/bar"),
 		newMultiaddr(t, "/ip4/127.0.0.1/tcp/4326/ws/qux"),
 		newMultiaddr(t, "/ip4/127.0.0.1/tcp/4326/ws/foo"),
+		newMultiaddr(t, "/dns/localhost/tcp/4327"),
 	}
 
 	for _, m := range lms {
@@ -102,6 +106,7 @@ func TestListenDuplicate(t *testing.T) {
 	lms := []ma.Multiaddr{
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4324"),
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/http/ws/foo"),
+		newMultiaddr(t, "/dns/localhost/tcp/4326"),
 	}
 
 	for _, m := range lms {
@@ -117,23 +122,25 @@ func TestListenDuplicate(t *testing.T) {
 		return
 	}
 
+	for _, m := range lms {
+		ln, err := Listen(m)
+		if err == nil {
+			t.Errorf("Listen(%s) expected an error", m)
+			ln.Close()
+		}
+	}
+
 	stop := make(chan struct{})
 	defer close(stop)
 
 	err := netecho("tcp", "127.0.0.1:4324", stop)
 	if err == nil {
-		t.Fatalf("expected an error")
+		t.Errorf("expected an error")
 	}
 
 	err = wsecho("tcp", "127.0.0.1:4325", stop)
 	if err == nil {
-		t.Fatalf("expected an error")
-	}
-
-	ln, err := Listen(newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/http/ws/foo"))
-	if err == nil {
-		ln.Close()
-		t.Fatalf("expected an error")
+		t.Errorf("expected an error")
 	}
 }
 
@@ -144,6 +151,7 @@ func TestListenFree(t *testing.T) {
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4324"),
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/http/ws/foo"),
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/http/ws/bar"),
+		newMultiaddr(t, "/dns/localhost/tcp/4326"),
 	}
 
 	lns := []Listener{}
@@ -200,6 +208,7 @@ func TestNumGoroutines(t *testing.T) {
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/http/ws/foo"),
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/http/ws/bar"),
 		newMultiaddr(t, "/ip4/0.0.0.0/tcp/4325/ws/qux"),
+		newMultiaddr(t, "/dns/localhost/tcp/4326"),
 	}
 
 	lns := []Listener{}

@@ -105,6 +105,7 @@ type matchreg struct {
 var matchers = &matchreg{
 	protocols: []MatchApplier{
 		IP{},
+		DNS{},
 		TCP{},
 		HTTP{},
 		WS{},

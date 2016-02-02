@@ -56,11 +56,17 @@ func (w WS) Apply(m ma.Multiaddr, side int, ctx Context) error {
 	case S_Client:
 		// resolve url
 		var url string
-		switch t := sctx.NetConn.(type) {
-		case *net.TCPConn:
-			url = fmt.Sprintf("ws://%s/%s", t.RemoteAddr().String(), path)
-		default:
-			url = fmt.Sprintf("ws://foo.bar/%s", path)
+		if mctx.Host != "" {
+			// this will make mctx.Host appear in http request headers,
+			// cloud servers often require that
+			url = fmt.Sprintf("ws://%s/%s", mctx.Host, path)
+		} else {
+			switch t := sctx.NetConn.(type) {
+			case *net.TCPConn:
+				url = fmt.Sprintf("ws://%s/%s", t.RemoteAddr().String(), path)
+			default:
+				url = fmt.Sprintf("ws://foo.bar/%s", path)
+			}
 		}
 
 		wcon, err := w.Select(sctx.NetConn, url)
