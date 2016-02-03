@@ -1,8 +1,10 @@
 # Multiaddr Friendly Net
 
-This is a pluggable reimplementation of [github.com/jbenet/go-multiaddr-net](https://github.com/jbenet/go-multiaddr-net).
+[![Build Status](https://travis-ci.org/Gaboose/go-multiaddr-net.svg?branch=master)](https://travis-ci.org/Gaboose/go-multiaddr-net)
 
-Currently supported protocols are: `/ip4`, `/ip6`, `/dns`, `/tcp`, `/ws` (or `/http/ws`). Try them out with manetcat.
+A pluggable reimplementation of [github.com/jbenet/go-multiaddr-net](https://github.com/jbenet/go-multiaddr-net).
+
+Right now works with `/ip4`, `/ip6`, `/dns`, `/tcp`, `/ws` (or `/http/ws`). Try them with manetcat.
 
 ```bash
 $ export GO15VENDOREXPERIMENT=1
