@@ -1,8 +1,9 @@
-package manet
+package impl
 
 import (
 	"errors"
 	"fmt"
+	"github.com/Gaboose/go-multiaddr-net/match"
 	"io"
 	"net"
 	"net/http"
@@ -26,7 +27,7 @@ func (w WS) Match(m ma.Multiaddr, side int) (int, bool) {
 	}
 
 	// If we're a client, also match "/http/ws".
-	if side == S_Client && len(ps) >= 2 &&
+	if side == match.S_Client && len(ps) >= 2 &&
 		ps[0].Name == "http" && ps[1].Name == "ws" {
 
 		return 2, true
@@ -35,7 +36,7 @@ func (w WS) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (w WS) Apply(m ma.Multiaddr, side int, ctx Context) error {
+func (w WS) Apply(m ma.Multiaddr, side int, ctx match.Context) error {
 	var path string
 	// ws client matches /http/ws too, so /ws might not be the first protocol
 	for _, p := range m.Protocols() {
@@ -53,7 +54,7 @@ func (w WS) Apply(m ma.Multiaddr, side int, ctx Context) error {
 
 	switch side {
 
-	case S_Client:
+	case match.S_Client:
 		// resolve url
 		var url string
 		if mctx.Host != "" {
@@ -76,10 +77,10 @@ func (w WS) Apply(m ma.Multiaddr, side int, ctx Context) error {
 		sctx.NetConn = wcon
 		return nil
 
-	case S_Server:
+	case match.S_Server:
 		if mctx.HTTPMux == nil {
 			// help the user out if /http is missing before /ws
-			HTTP{}.Apply(m, S_Server, ctx)
+			HTTP{}.Apply(m, match.S_Server, ctx)
 		}
 		ln, err := w.Handle(mctx.HTTPMux, "/"+path)
 		if err != nil {
@@ -108,7 +109,7 @@ func (w WS) Select(netcon net.Conn, url string) (*websocket.Conn, error) {
 	return wcon, nil
 }
 
-func (w WS) Handle(mux *ServeMux, pattern string) (net.Listener, error) {
+func (w WS) Handle(mux *match.ServeMux, pattern string) (net.Listener, error) {
 
 	closeCh := make(chan struct{})
 	ln := &wslistener{
@@ -144,6 +145,8 @@ func (ln wslistener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// It appears we mustn't pass wcon to external users as is.
 		// We'll pass a pipe instead, because the only way to know if a wcon
 		// was closed remotely is to read from it until EOF.
+		//
+		// See below for why we need to know when wcon is closed remotely.
 
 		ch := make(chan struct{})
 		p1, p2 := net.Pipe()
@@ -193,3 +196,21 @@ func (ln wslistener) Close() error {
 }
 
 func (ln wslistener) Addr() net.Addr { return nil }
+
+func ConcatClose(f1, f2 func() error) func() error {
+	return func() error {
+		err := f1()
+		err = f2()
+		return err
+	}
+}
+
+func recoverToError(maybeErr *error, err error) {
+	if r := recover(); r != nil {
+		if err != nil {
+			*maybeErr = err
+		} else {
+			*maybeErr = fmt.Errorf("%s", r)
+		}
+	}
+}

@@ -1,7 +1,8 @@
-package manet
+package impl
 
 import (
 	"fmt"
+	"github.com/Gaboose/go-multiaddr-net/match"
 	"net"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ func (t TCP) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (t TCP) Apply(m ma.Multiaddr, side int, ctx Context) error {
+func (t TCP) Apply(m ma.Multiaddr, side int, ctx match.Context) error {
 	p := m.Protocols()[0]
 	portstr, _ := m.ValueForProtocol(p.Code)
 
@@ -43,7 +44,7 @@ func (t TCP) Apply(m ma.Multiaddr, side int, ctx Context) error {
 
 	switch side {
 
-	case S_Client:
+	case match.S_Client:
 		var con net.Conn
 		var err error
 		if len(mctx.IPs) == 1 {
@@ -59,7 +60,7 @@ func (t TCP) Apply(m ma.Multiaddr, side int, ctx Context) error {
 		sctx.CloseFn = con.Close
 		return nil
 
-	case S_Server:
+	case match.S_Server:
 		netln, err := t.Listen(mctx.IPs[0], port)
 		if err != nil {
 			return err
@@ -73,6 +74,8 @@ func (t TCP) Apply(m ma.Multiaddr, side int, ctx Context) error {
 	return fmt.Errorf("incorrect side constant")
 }
 
+// DialMany tries to connect to all ips, returns the first successful one
+// and closes the others. If all fail, it returns an aggregated error.
 func (t TCP) DialMany(ips []net.IP, port int) (*net.TCPConn, error) {
 	firstCh := make(chan *net.TCPConn)
 	doneCh := make(chan struct{})
@@ -143,19 +146,4 @@ func (t TCP) Listen(ip net.IP, port int) (*net.TCPListener, error) {
 	}
 
 	return ln, nil
-}
-
-// FromTCPAddr converts a *net.TCPAddr type to a Multiaddr.
-func FromTCPAddr(addr *net.TCPAddr) (ma.Multiaddr, error) {
-	ipm, err := FromIP(addr.IP)
-	if err != nil {
-		return nil, err
-	}
-
-	tcpm, err := ma.NewMultiaddr(fmt.Sprintf("/tcp/%d", addr.Port))
-	if err != nil {
-		return nil, err
-	}
-
-	return ipm.Encapsulate(tcpm), nil
 }

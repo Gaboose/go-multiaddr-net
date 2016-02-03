@@ -1,7 +1,8 @@
-package manet
+package impl
 
 import (
 	"fmt"
+	"github.com/Gaboose/go-multiaddr-net/match"
 	ma "github.com/jbenet/go-multiaddr"
 	"net"
 )
@@ -23,7 +24,7 @@ func (_ IP) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (_ IP) Apply(m ma.Multiaddr, side int, ctx Context) error {
+func (_ IP) Apply(m ma.Multiaddr, side int, ctx match.Context) error {
 	p := m.Protocols()[0]
 	name := p.Name
 	s, _ := m.ValueForProtocol(p.Code)
@@ -57,6 +58,6 @@ func FromIP(ip net.IP) (ma.Multiaddr, error) {
 	case ip.To16() != nil:
 		return ma.NewMultiaddr("/ip6/" + ip.String())
 	default:
-		return nil, errIncorrectNetAddr
+		return nil, fmt.Errorf("incorrect network addr conversion")
 	}
 }

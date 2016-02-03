@@ -4,45 +4,11 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 
+	"github.com/Gaboose/go-multiaddr-net/match"
+	"github.com/Gaboose/go-multiaddr-net/match/impl"
 	ma "github.com/jbenet/go-multiaddr"
 )
-
-// Conn is the equivalent of a net.Conn object. It is the
-// result of calling the Dial or Listen functions in this
-// package, with associated local and remote Multiaddrs.
-type Conn interface {
-	net.Conn
-
-	// LocalMultiaddr returns the local Multiaddr associated
-	// with this connection
-	LocalMultiaddr() ma.Multiaddr
-
-	// RemoteMultiaddr returns the remote Multiaddr associated
-	// with this connection
-	RemoteMultiaddr() ma.Multiaddr
-}
-
-// A Listener is a generic network listener for stream-oriented protocols.
-// it's similar to net.Listener, except it provides its Multiaddr and
-// the Listener.Accept is changed to return this package's Conn.
-type Listener interface {
-
-	// Accept waits for and returns the next connection to the listener.
-	// Returns a Multiaddr friendly Conn
-	Accept() (Conn, error)
-
-	// Close closes the listener.
-	// Any blocked Accept operations will be unblocked and return errors.
-	Close() error
-
-	// Multiaddr returns the listener's (local) Multiaddr.
-	Multiaddr() ma.Multiaddr
-
-	// Addr returns the net.Listener's network address.
-	Addr() net.Addr
-}
 
 // Dial connects to a remote address
 func Dial(remote ma.Multiaddr) (Conn, error) {
@@ -50,18 +16,18 @@ func Dial(remote ma.Multiaddr) (Conn, error) {
 	matchers.Lock()
 	defer matchers.Unlock()
 
-	chain, split, err := matchers.buildChain(remote, S_Client)
+	chain, split, err := matchers.buildChain(remote, match.S_Client)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx := Context{}
+	ctx := NewContext()
 	sctx := ctx.Special()
 
 	// apply context mutators
 	for i, mch := range chain {
 
-		err := mch.Apply(split[i], S_Client, ctx)
+		err := mch.Apply(split[i], match.S_Client, ctx)
 		if err != nil {
 			if sctx.CloseFn != nil {
 				sctx.CloseFn()
@@ -91,51 +57,26 @@ func Dial(remote ma.Multiaddr) (Conn, error) {
 	}, nil
 }
 
-// matchreg is a Matcher registry used by Dial and Listen functions
-type matchreg struct {
-	sync.Mutex
-
-	// standard Matchers for both dialing and listening
-	protocols []MatchApplier
-
-	// running listeners available for reuse (e.g. with a ServeMux)
-	reusable []MatchApplier
-}
-
-var matchers = &matchreg{
-	protocols: []MatchApplier{
-		IP{},
-		DNS{},
-		TCP{},
-		HTTP{},
-		WS{},
-	},
-}
-
-// Listen announces on the local network address local.
+// Listen receives inbound connections on the local network address.
 func Listen(local ma.Multiaddr) (Listener, error) {
 	matchers.Lock()
 	defer matchers.Unlock()
 
 	// resolve a chain of applicable MatchAppliers
-	chain, split, err := matchers.buildChain(local, S_Server)
+	chain, split, err := matchers.buildChain(local, match.S_Server)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx := Context{}
+	ctx := NewContext()
 	sctx := ctx.Special()
 
 	// apply chain to empty context
 	for i, mch := range chain {
 
-		err := mch.Apply(split[i], S_Server, ctx)
+		err := mch.Apply(split[i], match.S_Server, ctx)
 
 		if err != nil {
-			// we reset sctx to ctx.Special() again, since it may have been overriden
-			// by the reusableContext using the ctx1.CopyTo(ctx2) method
-			sctx := ctx.Special()
-
 			if sctx.CloseFn != nil {
 				go sctx.CloseFn()
 			}
@@ -149,10 +90,6 @@ func Listen(local ma.Multiaddr) (Listener, error) {
 		}
 
 	}
-
-	// we reset sctx to ctx.Special() again, since it may have been overriden
-	// by the reusableContext using the ctx1.CopyTo(ctx2) method
-	sctx = ctx.Special()
 
 	if sctx.NetListener == nil {
 		if sctx.CloseFn != nil {
@@ -232,8 +169,6 @@ func trimPrefix(m, prem ma.Multiaddr) (ma.Multiaddr, bool) {
 	return ma.StringCast(strings.TrimPrefix(s, pres)), true
 }
 
-var errIncorrectNetAddr = fmt.Errorf("incorrect network addr conversion")
-
 // FromNetAddr converts a net.Addr type to a Multiaddr.
 func FromNetAddr(naddr net.Addr) (ma.Multiaddr, error) {
 	if tcpaddr, ok := naddr.(*net.TCPAddr); ok {
@@ -243,12 +178,17 @@ func FromNetAddr(naddr net.Addr) (ma.Multiaddr, error) {
 	}
 }
 
-func recoverToError(maybeErr *error, err error) {
-	if r := recover(); r != nil {
-		if err != nil {
-			*maybeErr = err
-		} else {
-			*maybeErr = fmt.Errorf("%s", r)
-		}
+// FromTCPAddr converts a *net.TCPAddr type to a Multiaddr.
+func FromTCPAddr(addr *net.TCPAddr) (ma.Multiaddr, error) {
+	ipm, err := impl.FromIP(addr.IP)
+	if err != nil {
+		return nil, err
 	}
+
+	tcpm, err := ma.NewMultiaddr(fmt.Sprintf("/tcp/%d", addr.Port))
+	if err != nil {
+		return nil, err
+	}
+
+	return ipm.Encapsulate(tcpm), nil
 }

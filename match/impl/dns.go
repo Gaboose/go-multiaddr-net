@@ -1,7 +1,8 @@
-package manet
+package impl
 
 import (
 	"fmt"
+	"github.com/Gaboose/go-multiaddr-net/match"
 	ma "github.com/jbenet/go-multiaddr"
 	"net"
 )
@@ -22,7 +23,7 @@ func (_ DNS) Match(m ma.Multiaddr, side int) (int, bool) {
 	return 0, false
 }
 
-func (_ DNS) Apply(m ma.Multiaddr, side int, ctx Context) error {
+func (_ DNS) Apply(m ma.Multiaddr, side int, ctx match.Context) error {
 	p := m.Protocols()[0]
 	host, _ := m.ValueForProtocol(p.Code)
 
