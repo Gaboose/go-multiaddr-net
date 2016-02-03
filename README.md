@@ -1,8 +1,35 @@
+# Multiaddr Friendly Net
+
+This is a pluggable reimplementation of [github.com/jbenet/go-multiaddr-net](https://github.com/jbenet/go-multiaddr-net).
+
+Currently supported protocols are: `/ip4`, `/ip6`, `/dns`, `/tcp`, `/ws` (or `/http/ws`). Try them out with manetcat.
+
+```bash
+$ export GO15VENDOREXPERIMENT=1
+$ go get github.com/Gaboose/go-multiaddr-net/tools/manetcat
+$ manetcat
+Usage: manetcat [-l] <multiaddr>
+  -l	listen mode, for inbound connections
+Examples:
+	manetcat -l /ip4/0.0.0.0/tcp/4324
+	manetcat /dns/localhost/tcp/4324
+	manetcat /dns/echo-gaboose.rhcloud.com/tcp/8000/ws/echo
+```
+
+[Source code](https://github.com/Gaboose/manet-echo) for echo-gaboose.rhcloud.com
+
+## extending with new protocols
+
+The design I opted for (and made sense to me the most) is to pass a kind of a "blackboard" (here called a Context) through executors (here called MatchAppliers), which they could fill with ip addresses, hostnames, net.Conn, etc, and executors at *any distance* to the right of the address could use/overwrite them. For example, `/ws` needs to know the hostname parsed by `/dns` to include it in http request headers, but there's a `/tcp` between them so a direct pipeline of parameters between executors wouldn't work.
+
+See [match/interface.go](https://github.com/Gaboose/go-multiaddr-net/blob/master/match/interface.go) below for MatchApplier and Context interfaces, or [match/impl](https://github.com/Gaboose/go-multiaddr-net/tree/master/match/impl) for MatchApplier implementations.
+
+```go
 package match
 
 import (
-	ma "github.com/jbenet/go-multiaddr"
-	"net"
+ma "github.com/jbenet/go-multiaddr"
+"net"
 )
 
 type Matcher interface {
@@ -84,3 +111,4 @@ type SpecialContext struct {
 	// in the chain.
 	CloseFn func() error
 }
+```
